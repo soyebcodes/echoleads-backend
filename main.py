@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -8,6 +9,9 @@ import psycopg2
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
@@ -117,25 +121,48 @@ def run_scan(payload: RunRequest) -> dict:
 
                 json_url = f"https://www.reddit.com/search.rss?q={requests.utils.quote(search_query)}&sort=new&t={t_param}&limit=100"
 
-                try:
-                    response = requests.get(json_url, timeout=20, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36 EchoLeads/1.0"})
-                    response.raise_for_status()
-                except Exception as exc:
-                    campaign_error = f"Reddit fetch failed: {exc}"
-                    print(f"Reddit fetch failed for {name}: {exc}")
-                    mark_campaign_run(cur, campaign_id, "failed", campaign_error)
-                    conn.commit()
-                    results.append({"campaign_id": str(campaign_id), "status": "failed", "error": campaign_error})
+                response = None
+                for attempt in range(1, 4):
+                    try:
+                        response = requests.get(json_url, timeout=20, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36 EchoLeads/1.0"})
+                        response.raise_for_status()
+                        break
+                    except requests.exceptions.HTTPError as exc:
+                        if response is not None and response.status_code == 429 and attempt < 3:
+                            wait_secs = 10 * attempt
+                            print(f"[Scan] Reddit 429 for '{name}', retry {attempt}/3 in {wait_secs}s")
+                            time.sleep(wait_secs)
+                            continue
+                        campaign_error = f"Reddit fetch failed: {exc}"
+                        print(f"Reddit fetch failed for {name}: {exc}")
+                        mark_campaign_run(cur, campaign_id, "failed", campaign_error)
+                        conn.commit()
+                        results.append({"campaign_id": str(campaign_id), "status": "failed", "error": campaign_error})
+                        response = None
+                        break
+                    except Exception as exc:
+                        campaign_error = f"Reddit fetch failed: {exc}"
+                        print(f"Reddit fetch failed for {name}: {exc}")
+                        mark_campaign_run(cur, campaign_id, "failed", campaign_error)
+                        conn.commit()
+                        results.append({"campaign_id": str(campaign_id), "status": "failed", "error": campaign_error})
+                        response = None
+                        break
+
+                if response is None:
                     continue
 
                 from bs4 import BeautifulSoup
                 soup = BeautifulSoup(response.text, "xml")
                 entries = soup.find_all("entry")
+                print(f"[Scan] Campaign '{name}': found {len(entries)} Reddit posts")
 
                 cutoff_time = 0
                 if time_filter_days:
                     cutoff_time = time.time() - (time_filter_days * 86400)
 
+                scored_count = 0
+                saved_count = 0
                 for entry in entries:
                     from datetime import datetime
                     published = entry.published.get_text() if entry.published else ""
@@ -166,9 +193,13 @@ def run_scan(payload: RunRequest) -> dict:
                         continue
 
                     relevance = score_relevance(title, content, description, target_description, pos_keywords, exclude_description)
+                    scored_count += 1
+
                     if relevance < 70:
                         continue
 
+                    saved_count += 1
+                    print(f"[Scan] Lead saved (score {relevance}): {title[:80]}")
                     cur.execute(
                         """
                         INSERT INTO leads (campaign_id, reddit_post_id, title, content, url, author, ai_relevance_score, status)
@@ -178,6 +209,7 @@ def run_scan(payload: RunRequest) -> dict:
                         (campaign_id, post_id, title, content, url, author, relevance, "new"),
                     )
 
+                print(f"[Scan] Campaign '{name}': scored {scored_count}, saved {saved_count} leads")
                 mark_campaign_run(cur, campaign_id, "success")
                 results.append({"campaign_id": str(campaign_id), "status": "success"})
             except Exception as exc:
@@ -186,7 +218,8 @@ def run_scan(payload: RunRequest) -> dict:
                 results.append({"campaign_id": str(campaign_id), "status": "failed", "error": campaign_error})
 
             conn.commit()
-            time.sleep(5) # delay to avoid 429 Too Many Requests
+            if len(campaigns) > 1:
+                time.sleep(5) # delay between campaigns to avoid 429 Too Many Requests
 
         return {"status": "ok", "processed": len(campaigns), "results": results}
     except Exception as exc:
@@ -234,16 +267,20 @@ def clean_text(value: str) -> str:
 def score_relevance(title: str, content: str, description: Optional[str], target_description: Optional[str], pos_keywords: list[str], exclude_description: Optional[str]) -> int:
     text = f"{title} {content}".lower()
 
-    if exclude_description:
-        exc_terms = [t.lower() for t in re.split(r"[^a-zA-Z0-9]+", exclude_description) if len(t) > 3]
-        if any(term in text for term in exc_terms):
-            return 0
-
     matches = 0
     if pos_keywords:
         for kw in pos_keywords:
-            if kw in text:
+            kw_lower = kw.lower().strip()
+            if not kw_lower:
+                continue
+            # Exact phrase match (highest score)
+            if kw_lower in text:
                 matches += 40
+            else:
+                # Partial match: all significant words in the keyword appear in text
+                words = [w for w in re.split(r"[^a-z0-9]+", kw_lower) if len(w) > 2]
+                if words and all(w in text for w in words):
+                    matches += 25
     else:
         if "freelancer" in text:
             matches += 20

@@ -186,7 +186,7 @@ def run_scan(payload: RunRequest) -> dict:
                 results.append({"campaign_id": str(campaign_id), "status": "failed", "error": campaign_error})
 
             conn.commit()
-            time.sleep(2) # delay to avoid 429 Too Many Requests
+            time.sleep(5) # delay to avoid 429 Too Many Requests
 
         return {"status": "ok", "processed": len(campaigns), "results": results}
     except Exception as exc:

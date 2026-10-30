@@ -26,7 +26,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 SCANNER_API_KEY = os.getenv("SCANNER_API_KEY")
 
 OLLAMA_BASE_URL = (os.getenv("OLLAMA_BASE_URL") or "https://ollama.com/v1").rstrip("/")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL") or "gpt-oss:120b"
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL") or "deepseek-v4.1-flash"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 GROQ_MODEL = os.getenv("GROQ_MODEL") or "openai/gpt-oss-20b"
 
@@ -464,7 +464,7 @@ def ai_providers() -> list[dict]:
     return providers
 
 
-def ai_chat(messages: list[dict], temperature: float = 0.2, max_tokens: int = 300) -> Optional[str]:
+def ai_chat(messages: list[dict], temperature: float = 0.2, max_tokens: int = 700) -> Optional[str]:
     for provider in ai_providers():
         try:
             response = requests.post(

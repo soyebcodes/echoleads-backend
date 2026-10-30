@@ -65,7 +65,7 @@ Set these in `.env` (see `.env.example`):
 | `DATABASE_URL` | ✅ | Postgres connection string for the shared EchoLeads database |
 | `OLLAMA_API_KEY` | Recommended | Ollama Cloud AI scoring (primary) |
 | `OLLAMA_BASE_URL` | No | Defaults to `https://ollama.com/v1` |
-| `OLLAMA_MODEL` | No | Defaults to `gpt-oss:120b` |
+| `OLLAMA_MODEL` | No | Defaults to `deepseek-v4.1-flash` |
 | `GROQ_API_KEY` | No | Groq fallback |
 | `GROQ_MODEL` | No | Defaults to `openai/gpt-oss-20b` |
 | `X_BEARER_TOKEN` | No | X API v2 recent search |
